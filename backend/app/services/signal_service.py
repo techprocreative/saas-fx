@@ -4,7 +4,7 @@ Implements Phase 2.2 of Production Roadmap
 """
 import asyncio
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 import logging
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class SignalType(str, Enum):
-    """Trading signal types"""
+    """Signal types"""
     BUY = "buy"
     SELL = "sell"
     HOLD = "hold"
@@ -22,30 +22,34 @@ class SignalType(str, Enum):
 
 class SignalStrength(str, Enum):
     """Signal strength levels"""
-    WEAK = "weak"
-    MODERATE = "moderate"
     STRONG = "strong"
+    MODERATE = "moderate"
+    WEAK = "weak"
 
 
 class TradingSignal:
-    """Trading signal data class"""
+    """Trading signal data structure"""
     
     def __init__(
         self,
         symbol: str,
         signal_type: SignalType,
         strength: SignalStrength,
-        price: float,
         confidence: float,
-        indicators: Dict,
+        entry_price: float,
+        take_profit: Optional[float] = None,
+        stop_loss: Optional[float] = None,
+        indicators: Optional[Dict] = None,
         timestamp: Optional[datetime] = None
     ):
         self.symbol = symbol
         self.signal_type = signal_type
         self.strength = strength
-        self.price = price
-        self.confidence = confidence  # 0.0 to 1.0
-        self.indicators = indicators
+        self.confidence = confidence
+        self.entry_price = entry_price
+        self.take_profit = take_profit
+        self.stop_loss = stop_loss
+        self.indicators = indicators or {}
         self.timestamp = timestamp or datetime.utcnow()
     
     def to_dict(self) -> Dict:
@@ -54,28 +58,30 @@ class TradingSignal:
             'symbol': self.symbol,
             'signal_type': self.signal_type.value,
             'strength': self.strength.value,
-            'price': self.price,
             'confidence': self.confidence,
+            'entry_price': self.entry_price,
+            'take_profit': self.take_profit,
+            'stop_loss': self.stop_loss,
             'indicators': self.indicators,
             'timestamp': self.timestamp.isoformat()
         }
 
 
-class TechnicalAnalyzer:
-    """Technical analysis for trading signals"""
+class TechnicalIndicators:
+    """Calculate technical indicators for signal generation"""
     
     @staticmethod
-    def calculate_sma(prices: List[float], period: int) -> Optional[float]:
+    def calculate_sma(prices: List[float], period: int) -> float:
         """Calculate Simple Moving Average"""
         if len(prices) < period:
-            return None
+            return 0.0
         return sum(prices[-period:]) / period
     
     @staticmethod
-    def calculate_ema(prices: List[float], period: int) -> Optional[float]:
+    def calculate_ema(prices: List[float], period: int) -> float:
         """Calculate Exponential Moving Average"""
         if len(prices) < period:
-            return None
+            return 0.0
         
         multiplier = 2 / (period + 1)
         ema = prices[0]
@@ -86,16 +92,16 @@ class TechnicalAnalyzer:
         return ema
     
     @staticmethod
-    def calculate_rsi(prices: List[float], period: int = 14) -> Optional[float]:
+    def calculate_rsi(prices: List[float], period: int = 14) -> float:
         """Calculate Relative Strength Index"""
         if len(prices) < period + 1:
-            return None
+            return 50.0  # Neutral
         
         gains = []
         losses = []
         
         for i in range(1, len(prices)):
-            change = prices[i] - prices[i - 1]
+            change = prices[i] - prices[i-1]
             if change > 0:
                 gains.append(change)
                 losses.append(0)
@@ -107,7 +113,7 @@ class TechnicalAnalyzer:
         avg_loss = sum(losses[-period:]) / period
         
         if avg_loss == 0:
-            return 100
+            return 100.0
         
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
@@ -115,26 +121,16 @@ class TechnicalAnalyzer:
         return rsi
     
     @staticmethod
-    def calculate_macd(
-        prices: List[float],
-        fast_period: int = 12,
-        slow_period: int = 26,
-        signal_period: int = 9
-    ) -> Optional[Dict]:
+    def calculate_macd(prices: List[float]) -> Dict[str, float]:
         """Calculate MACD (Moving Average Convergence Divergence)"""
-        if len(prices) < slow_period:
-            return None
+        if len(prices) < 26:
+            return {'macd': 0.0, 'signal': 0.0, 'histogram': 0.0}
         
-        ema_fast = TechnicalAnalyzer.calculate_ema(prices, fast_period)
-        ema_slow = TechnicalAnalyzer.calculate_ema(prices, slow_period)
+        ema_12 = TechnicalIndicators.calculate_ema(prices, 12)
+        ema_26 = TechnicalIndicators.calculate_ema(prices, 26)
+        macd_line = ema_12 - ema_26
         
-        if ema_fast is None or ema_slow is None:
-            return None
-        
-        macd_line = ema_fast - ema_slow
-        
-        # For signal line, we would need historical MACD values
-        # Simplified version here
+        # Signal line (9-period EMA of MACD)
         signal_line = macd_line * 0.9  # Simplified
         histogram = macd_line - signal_line
         
@@ -143,287 +139,251 @@ class TechnicalAnalyzer:
             'signal': signal_line,
             'histogram': histogram
         }
-    
-    @staticmethod
-    def calculate_bollinger_bands(
-        prices: List[float],
-        period: int = 20,
-        std_dev: float = 2.0
-    ) -> Optional[Dict]:
-        """Calculate Bollinger Bands"""
-        if len(prices) < period:
-            return None
-        
-        sma = TechnicalAnalyzer.calculate_sma(prices, period)
-        if sma is None:
-            return None
-        
-        # Calculate standard deviation
-        recent_prices = prices[-period:]
-        variance = sum((p - sma) ** 2 for p in recent_prices) / period
-        std = variance ** 0.5
-        
-        upper_band = sma + (std_dev * std)
-        lower_band = sma - (std_dev * std)
-        
-        return {
-            'upper': upper_band,
-            'middle': sma,
-            'lower': lower_band
-        }
 
 
 class SignalGenerator:
     """Generate trading signals based on technical analysis"""
     
     def __init__(self):
-        self.analyzer = TechnicalAnalyzer()
+        self.indicators = TechnicalIndicators()
     
-    async def generate_signal(self, symbol: str, timeframe: str = '1h') -> TradingSignal:
+    async def generate_signal(self, symbol: str) -> Optional[TradingSignal]:
         """
         Generate trading signal for a symbol
         
         Args:
-            symbol: Trading symbol
-            timeframe: Timeframe for analysis
+            symbol: Trading symbol (e.g., 'EUR/USD')
             
         Returns:
-            TradingSignal object
+            TradingSignal or None if no clear signal
         """
         try:
             # Get historical data
             historical_data = await market_data_service.get_historical_data(
                 symbol=symbol,
-                timeframe=timeframe,
-                days=30
+                timeframe='1h',
+                days=7
             )
             
-            if not historical_data or len(historical_data) < 20:
+            if len(historical_data) < 50:
                 logger.warning(f"Insufficient data for {symbol}")
-                return self._create_hold_signal(symbol, 0.0)
+                return None
             
             # Extract closing prices
-            close_prices = [candle['close'] for candle in historical_data]
-            current_price = close_prices[-1]
+            prices = [candle['close'] for candle in historical_data]
+            current_price = prices[-1]
             
             # Calculate indicators
-            indicators = {}
+            sma_20 = self.indicators.calculate_sma(prices, 20)
+            sma_50 = self.indicators.calculate_sma(prices, 50)
+            ema_12 = self.indicators.calculate_ema(prices, 12)
+            rsi = self.indicators.calculate_rsi(prices)
+            macd = self.indicators.calculate_macd(prices)
             
-            # Moving Averages
-            sma_20 = self.analyzer.calculate_sma(close_prices, 20)
-            sma_50 = self.analyzer.calculate_sma(close_prices, 50) if len(close_prices) >= 50 else None
-            ema_12 = self.analyzer.calculate_ema(close_prices, 12)
+            # Signal generation logic
+            signal_type = SignalType.HOLD
+            strength = SignalStrength.WEAK
+            confidence = 0.5
             
-            indicators['sma_20'] = sma_20
-            indicators['sma_50'] = sma_50
-            indicators['ema_12'] = ema_12
+            # Bullish signals
+            bullish_signals = 0
+            if current_price > sma_20:
+                bullish_signals += 1
+            if sma_20 > sma_50:
+                bullish_signals += 1
+            if rsi < 30:  # Oversold
+                bullish_signals += 2
+            if macd['histogram'] > 0:
+                bullish_signals += 1
             
-            # RSI
-            rsi = self.analyzer.calculate_rsi(close_prices, 14)
-            indicators['rsi'] = rsi
+            # Bearish signals
+            bearish_signals = 0
+            if current_price < sma_20:
+                bearish_signals += 1
+            if sma_20 < sma_50:
+                bearish_signals += 1
+            if rsi > 70:  # Overbought
+                bearish_signals += 2
+            if macd['histogram'] < 0:
+                bearish_signals += 1
             
-            # MACD
-            macd = self.analyzer.calculate_macd(close_prices)
-            indicators['macd'] = macd
+            # Determine signal
+            if bullish_signals >= 3:
+                signal_type = SignalType.BUY
+                strength = SignalStrength.STRONG if bullish_signals >= 4 else SignalStrength.MODERATE
+                confidence = min(0.9, 0.5 + (bullish_signals * 0.1))
+            elif bearish_signals >= 3:
+                signal_type = SignalType.SELL
+                strength = SignalStrength.STRONG if bearish_signals >= 4 else SignalStrength.MODERATE
+                confidence = min(0.9, 0.5 + (bearish_signals * 0.1))
             
-            # Bollinger Bands
-            bb = self.analyzer.calculate_bollinger_bands(close_prices, 20)
-            indicators['bollinger_bands'] = bb
+            # Calculate take profit and stop loss
+            take_profit = None
+            stop_loss = None
             
-            # Generate signal based on indicators
-            signal = self._analyze_indicators(
-                current_price,
-                indicators,
-                symbol
+            if signal_type == SignalType.BUY:
+                take_profit = current_price * 1.02  # 2% profit
+                stop_loss = current_price * 0.99    # 1% loss
+            elif signal_type == SignalType.SELL:
+                take_profit = current_price * 0.98  # 2% profit
+                stop_loss = current_price * 1.01    # 1% loss
+            
+            # Create signal
+            signal = TradingSignal(
+                symbol=symbol,
+                signal_type=signal_type,
+                strength=strength,
+                confidence=confidence,
+                entry_price=current_price,
+                take_profit=take_profit,
+                stop_loss=stop_loss,
+                indicators={
+                    'sma_20': round(sma_20, 5),
+                    'sma_50': round(sma_50, 5),
+                    'ema_12': round(ema_12, 5),
+                    'rsi': round(rsi, 2),
+                    'macd': {
+                        'macd': round(macd['macd'], 5),
+                        'signal': round(macd['signal'], 5),
+                        'histogram': round(macd['histogram'], 5)
+                    },
+                    'bullish_signals': bullish_signals,
+                    'bearish_signals': bearish_signals
+                }
+            )
+            
+            logger.info(
+                f"Generated {signal_type.value} signal for {symbol}",
+                extra={
+                    'symbol': symbol,
+                    'signal': signal_type.value,
+                    'confidence': confidence,
+                    'strength': strength.value
+                }
             )
             
             return signal
             
         except Exception as e:
             logger.error(f"Error generating signal for {symbol}: {e}")
-            return self._create_hold_signal(symbol, 0.0)
+            return None
     
-    def _analyze_indicators(
-        self,
-        current_price: float,
-        indicators: Dict,
-        symbol: str
-    ) -> TradingSignal:
-        """Analyze indicators and generate signal"""
+    async def generate_signals_batch(self, symbols: List[str]) -> List[TradingSignal]:
+        """
+        Generate signals for multiple symbols
         
-        buy_signals = 0
-        sell_signals = 0
-        total_weight = 0
+        Args:
+            symbols: List of trading symbols
+            
+        Returns:
+            List of trading signals
+        """
+        tasks = [self.generate_signal(symbol) for symbol in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # RSI Analysis (Weight: 3)
-        rsi = indicators.get('rsi')
-        if rsi:
-            if rsi < 30:
-                buy_signals += 3  # Oversold
-            elif rsi > 70:
-                sell_signals += 3  # Overbought
-            elif 40 <= rsi <= 60:
-                pass  # Neutral
-            total_weight += 3
+        signals = []
+        for result in results:
+            if isinstance(result, TradingSignal):
+                signals.append(result)
+            elif isinstance(result, Exception):
+                logger.error(f"Error in batch signal generation: {result}")
         
-        # Moving Average Analysis (Weight: 2)
-        sma_20 = indicators.get('sma_20')
-        if sma_20:
-            if current_price > sma_20 * 1.01:  # Price above MA
-                buy_signals += 2
-            elif current_price < sma_20 * 0.99:  # Price below MA
-                sell_signals += 2
-            total_weight += 2
-        
-        # MACD Analysis (Weight: 2)
-        macd = indicators.get('macd')
-        if macd:
-            macd_histogram = macd.get('histogram', 0)
-            if macd_histogram > 0:
-                buy_signals += 2
-            elif macd_histogram < 0:
-                sell_signals += 2
-            total_weight += 2
-        
-        # Bollinger Bands Analysis (Weight: 1)
-        bb = indicators.get('bollinger_bands')
-        if bb:
-            if current_price < bb['lower']:
-                buy_signals += 1  # Price at lower band
-            elif current_price > bb['upper']:
-                sell_signals += 1  # Price at upper band
-            total_weight += 1
-        
-        # Calculate confidence
-        if total_weight == 0:
-            return self._create_hold_signal(symbol, current_price)
-        
-        buy_confidence = buy_signals / total_weight
-        sell_confidence = sell_signals / total_weight
-        
-        # Determine signal
-        if buy_confidence > 0.6:
-            signal_type = SignalType.BUY
-            strength = SignalStrength.STRONG if buy_confidence > 0.8 else SignalStrength.MODERATE
-            confidence = buy_confidence
-        elif sell_confidence > 0.6:
-            signal_type = SignalType.SELL
-            strength = SignalStrength.STRONG if sell_confidence > 0.8 else SignalStrength.MODERATE
-            confidence = sell_confidence
-        else:
-            signal_type = SignalType.HOLD
-            strength = SignalStrength.WEAK
-            confidence = max(buy_confidence, sell_confidence)
-        
-        return TradingSignal(
-            symbol=symbol,
-            signal_type=signal_type,
-            strength=strength,
-            price=current_price,
-            confidence=confidence,
-            indicators=indicators
-        )
-    
-    def _create_hold_signal(self, symbol: str, price: float) -> TradingSignal:
-        """Create a HOLD signal"""
-        return TradingSignal(
-            symbol=symbol,
-            signal_type=SignalType.HOLD,
-            strength=SignalStrength.WEAK,
-            price=price,
-            confidence=0.0,
-            indicators={}
-        )
+        return signals
 
 
 class SignalService:
     """
-    Main signal generation service
-    Manages signal generation and caching
+    Main signal service
+    Manages signal generation and validation
     """
     
     def __init__(self):
         self.generator = SignalGenerator()
-        self.signal_cache: Dict[str, TradingSignal] = {}
-        self.cache_ttl = 300  # 5 minutes
+        self.active_signals: Dict[str, TradingSignal] = {}
+        self.signal_history: List[TradingSignal] = []
     
-    async def get_signal(self, symbol: str, use_cache: bool = True) -> TradingSignal:
+    async def get_signal(self, symbol: str, force_regenerate: bool = False) -> Optional[TradingSignal]:
         """
         Get trading signal for symbol
         
         Args:
             symbol: Trading symbol
-            use_cache: Whether to use cached signal
+            force_regenerate: Force signal regeneration
             
         Returns:
-            TradingSignal object
+            TradingSignal or None
         """
-        cache_key = f"signal:{symbol}"
-        
-        if use_cache and cache_key in self.signal_cache:
-            cached_signal = self.signal_cache[cache_key]
-            age = (datetime.utcnow() - cached_signal.timestamp).seconds
+        # Check if we have a recent signal
+        if not force_regenerate and symbol in self.active_signals:
+            signal = self.active_signals[symbol]
+            age = (datetime.utcnow() - signal.timestamp).seconds
             
-            if age < self.cache_ttl:
+            if age < 3600:  # Signal valid for 1 hour
                 logger.debug(f"Using cached signal for {symbol}")
-                return cached_signal
+                return signal
         
         # Generate new signal
         signal = await self.generator.generate_signal(symbol)
-        self.signal_cache[cache_key] = signal
+        
+        if signal:
+            self.active_signals[symbol] = signal
+            self.signal_history.append(signal)
+            
+            # Keep only last 1000 signals in history
+            if len(self.signal_history) > 1000:
+                self.signal_history = self.signal_history[-1000:]
         
         return signal
     
     async def get_signals_batch(self, symbols: List[str]) -> Dict[str, TradingSignal]:
         """Get signals for multiple symbols"""
-        signals = {}
+        signals = await self.generator.generate_signals_batch(symbols)
         
-        # Generate signals concurrently
-        tasks = [self.get_signal(symbol) for symbol in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        result = {}
+        for signal in signals:
+            result[signal.symbol] = signal
+            self.active_signals[signal.symbol] = signal
+            self.signal_history.append(signal)
         
-        for symbol, result in zip(symbols, results):
-            if isinstance(result, Exception):
-                logger.error(f"Error generating signal for {symbol}: {result}")
-                signals[symbol] = self.generator._create_hold_signal(symbol, 0.0)
-            else:
-                signals[symbol] = result
-        
-        return signals
+        return result
     
-    async def monitor_signals(self, symbols: List[str], callback):
+    def get_signal_history(self, symbol: Optional[str] = None, limit: int = 100) -> List[Dict]:
+        """Get signal history"""
+        history = self.signal_history
+        
+        if symbol:
+            history = [s for s in history if s.symbol == symbol]
+        
+        return [s.to_dict() for s in history[-limit:]]
+    
+    def validate_signal(self, signal: TradingSignal) -> bool:
         """
-        Monitor signals for multiple symbols
+        Validate a trading signal
         
         Args:
-            symbols: List of symbols to monitor
-            callback: Async function to call with signal updates
+            signal: Trading signal to validate
+            
+        Returns:
+            True if signal is valid
         """
-        logger.info(f"Starting signal monitoring for {len(symbols)} symbols")
+        # Check confidence threshold
+        if signal.confidence < 0.6:
+            logger.warning(f"Signal confidence too low: {signal.confidence}")
+            return False
         
-        while True:
-            try:
-                signals = await self.get_signals_batch(symbols)
-                
-                # Filter for actionable signals (BUY/SELL)
-                actionable = {
-                    symbol: signal
-                    for symbol, signal in signals.items()
-                    if signal.signal_type != SignalType.HOLD
-                }
-                
-                if actionable:
-                    await callback(actionable)
-                
-                # Wait before next check
-                await asyncio.sleep(60)  # Check every minute
-                
-            except asyncio.CancelledError:
-                logger.info("Signal monitoring cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in signal monitoring: {e}")
-                await asyncio.sleep(30)  # Wait before retry
+        # Check if signal is too old
+        age = (datetime.utcnow() - signal.timestamp).seconds
+        if age > 3600:  # 1 hour
+            logger.warning(f"Signal too old: {age}s")
+            return False
+        
+        # Check if take profit and stop loss are set
+        if signal.signal_type != SignalType.HOLD:
+            if not signal.take_profit or not signal.stop_loss:
+                logger.warning("Missing take profit or stop loss")
+                return False
+        
+        return True
 
 
 # Global instance
