@@ -1,6 +1,6 @@
 # FastAPI and ASGI server
 fastapi==0.104.1
-uvicorn==0.24.0
+uvicorn[standard]==0.24.0
 python-jose[cryptography]==3.3.0
 python-multipart==0.0.6
 
@@ -19,14 +19,31 @@ pydantic-settings==2.1.0
 
 # Security
 passlib[bcrypt]==1.7.4
-cryptography==41.0.8
+cryptography==42.0.8
+pyjwt==2.8.0
+
+# Rate Limiting & Security
+slowapi==0.1.9
+python-dotenv==1.0.0
+
+# Retry & Circuit Breaker
+tenacity==8.2.3
+pybreaker==1.0.1
+
+# Structured Logging
+structlog==23.2.0
+python-json-logger==2.0.7
+
+# System Monitoring
+psutil==5.9.6
 
 # Trading specific
-freqtrade==2025.8
+# freqtrade requires Python 3.11+, commented for now
+# freqtrade==2025.6
 ccxt==4.1.50
 pandas==2.1.4
 numpy==1.26.2
-ta-lib==0.4.28
+# ta-lib==0.4.28  # Requires manual system library installation
 scikit-learn==1.3.2
 
 # AI/LLM
